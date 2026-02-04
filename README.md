@@ -2,53 +2,51 @@
 
 Este repositório demonstra, de forma **prática e didática**, como funciona um **Canary Deploy** utilizando **Argo Rollouts**, **Kubernetes (kind)** e uma aplicação simples em **Python (FastAPI)**.
 
-O foco é **entender o comportamento real de um rollout canary**, sem service mesh, sem Istio e sem métricas avançadas, evitando confusões comuns entre **deployment tradicional**, **canary** e **load balancing**.
+O foco deste laboratório é **entender o funcionamento interno do Argo Rollouts**, sem service mesh, sem Istio e sem métricas avançadas, evitando confusões comuns entre **deployment tradicional**, **canary deploy** e **load balancing**.
 
 ---
 
 ## 📌 Objetivo
 
-Simular um cenário real onde:
+Simular um **Canary Deploy controlado**, onde:
 
 * **v1** é a versão estável da aplicação
-* **v2** é uma nova versão sendo liberada gradualmente
-* o tráfego é **dividido progressivamente** entre v1 e v2
+* **v2** é criada como versão canary
+* o tráfego de usuários **continua indo 100% para v1**
 * o rollout ocorre em **etapas (steps)** com **pausas controladas**
-* a nova versão só se torna estável após completar todas as etapas
+* a nova versão **só começa a receber tráfego após ser promovida**
+* o foco é **visualizar e entender o ciclo de vida do rollout**
 
-Esse padrão é amplamente utilizado para:
+Este cenário é ideal para:
 
-* reduzir risco em deploys
-* validar novas versões com usuários reais
-* liberar funcionalidades de forma controlada
-* permitir rollback rápido
-* aumentar a confiabilidade do sistema
+* aprender Argo Rollouts do zero
+* visualizar stable vs canary
+* entender pausas, promoção e rollback
 
 ---
 
 ## 🧠 Conceito importante
 
-> Canary Deploy **divide tráfego**
-> Canary Deploy **não copia requisições**
+> Neste cenário, o Canary **não divide tráfego**.  
+> A divisão de tráfego **só acontece quando existe traffic routing configurado**.
 
-Fluxo real:
+Fluxo real deste laboratório:
 
 ```
+
 Request
-   |
-   v
+|
+v
 Kubernetes Service
-   |
-   ├── v1 (stable)
-   |
-   └── v2 (canary)
+|
+└── v1 (stable)
+
+v2 (canary)
+└── aguardando promoção
+
 ```
 
-Durante o rollout:
-
-* parte dos usuários recebe resposta da v1
-* parte dos usuários recebe resposta da v2
-* a proporção muda conforme os steps configurados
+📌 A versão **v2 só passa a receber tráfego após o rollout ser promovido**.
 
 ---
 
@@ -58,16 +56,18 @@ Este laboratório **não utiliza**:
 
 * Istio
 * Service Mesh
+* NGINX Ingress
 * Prometheus ou métricas externas
-* Load balancer avançado
+* Divisão percentual de tráfego
 
-📌 O foco aqui é **aprender Argo Rollouts**, não observabilidade ou malha de serviço.
+📌 O foco aqui é **aprender Argo Rollouts**, não observabilidade nem malha de serviço.
 
 ---
 
 ## 📁 Estrutura do projeto
 
 ```
+
 argo-rollouts-lab/
 ├── app/
 │   ├── main.py
@@ -78,7 +78,8 @@ argo-rollouts-lab/
 │   └── service.yaml
 ├── kind-cluster.yaml
 └── README.md
-```
+
+````
 
 ---
 
@@ -97,7 +98,7 @@ argo-rollouts-lab/
 
 ```bash
 kind create cluster --name argo --config kind-cluster.yaml
-```
+````
 
 ---
 
@@ -110,7 +111,7 @@ kubectl apply -n argo-rollouts \
   -f https://raw.githubusercontent.com/argoproj/argo-rollouts/stable/manifests/install.yaml
 ```
 
-Instale o plugin CLI:
+Verifique a instalação:
 
 ```bash
 kubectl argo rollouts version
@@ -144,12 +145,14 @@ kubectl apply -f k8s/rollout.yaml
 kubectl argo rollouts get rollout demo-rollout --watch
 ```
 
-Informações observadas:
+Você poderá observar:
 
 * pods **stable** e **canary**
 * step atual do rollout
-* peso do tráfego
-* status geral
+* pausas configuradas
+* status geral do rollout
+
+📌 Mesmo existindo pods canary, **eles não recebem tráfego ainda**.
 
 ---
 
@@ -167,7 +170,7 @@ http://localhost:3100
 
 No dashboard é possível:
 
-* visualizar o progresso do canary
+* visualizar o progresso do rollout
 * acompanhar pausas
 * promover ou abortar o rollout
 * entender visualmente stable vs canary
@@ -180,6 +183,11 @@ Atualize a imagem no `rollout.yaml`:
 
 ```yaml
 image: demo-app:2.0
+```
+
+E altere a variável de ambiente da aplicação:
+
+```yaml
 APP_VERSION: "v2"
 ```
 
@@ -196,7 +204,7 @@ Reaplique o rollout:
 kubectl apply -f k8s/rollout.yaml
 ```
 
-O canary será iniciado automaticamente.
+O rollout canary será iniciado automaticamente.
 
 ---
 
@@ -208,13 +216,13 @@ Expose o service localmente:
 kubectl port-forward svc/demo-app 8080:80
 ```
 
-Faça múltiplas requisições:
+Faça requisições:
 
 ```bash
 curl localhost:8080
 ```
 
-Você observará respostas alternando entre:
+Durante o rollout, você verá **apenas respostas da v1**:
 
 ```json
 {
@@ -223,7 +231,13 @@ Você observará respostas alternando entre:
 }
 ```
 
-e
+Após promover o rollout:
+
+```bash
+kubectl argo rollouts promote demo-rollout
+```
+
+As respostas passarão a ser da **v2**:
 
 ```json
 {
@@ -232,13 +246,8 @@ e
 }
 ```
 
-Isso confirma a **divisão de tráfego do canary**.
+Isso confirma que:
 
----
-
-## ✅ Boas práticas
-
-* começar com percentuais baixos (10% ou 20%)
-* usar pausas para validação manual
-* manter rollback simples e rápido
-* visualizar o rollout antes de automatizar métricas
+* o rollout foi promovido
+* a v2 se tornou a nova versão estável
+* o tráfego agora aponta para a nova versão
